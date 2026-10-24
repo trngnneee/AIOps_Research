@@ -309,3 +309,70 @@ Sau khi một fault plan được verify, hệ thống chạy trước (pre-exec
 
 **Liên hệ với các gap:** cơ chế này giải quyết Gap 1 (agent điều tra qua tool hướng hệ thống thay vì đọc bản dump telemetry) và Gap 2 (các agent khác nhau gặp cùng một bằng chứng và cùng một ánh xạ truy vấn–phản hồi).
 
+#### 3.3.3 Ground-Truth Annotation (§3.3.3)
+
+Mỗi case đã verify có hai loại nhãn chuẩn, ký hiệu G* = ⟨R*, D*⟩. Nhãn được tạo lúc xây benchmark, trước khi có bất kỳ agent nào chạy, và dựa trên dữ liệu của hệ thống (chuỗi nhân quả đã verify và kho response của snapshot), không dựa trên log gọi tool của agent.
+
+```
+G* = ⟨R*, D*⟩                       bộ đáp án chuẩn của 1 case
+│
+├── R*  (outcome label)             đáp án kết quả  → so với R̂ của agent
+│   ├── C*   component bị lỗi
+│   └── F*   fault type
+│
+└── D*  (process label)             đồ thị bằng chứng → so với T của agent
+    ├── M*   milestone              1 sự thật chẩn đoán nguyên tử
+    ├── K*   nhóm milestone
+    │   ├── nhóm 1 phần tử          bắt buộc phải biết
+    │   └── nhóm nhiều phần tử      thay thế nhau, chỉ cần biết 1
+    ├── ≺*   thứ tự nhân quả giữa các nhóm (đồ thị có hướng)
+    └── Q*   evidence bundle        cách chứng minh 1 milestone
+        └── q   clause              tool + tham số + điều kiện trên response
+            ├── bundle 1 clause     q1
+            └── bundle nhiều clause q2 ∧ q3 (cần đủ cả hai)
+```
+
+**Outcome label R\***
+- R* = ⟨C*, F*⟩: component bị lỗi và fault type thật.
+- Lấy trực tiếp từ fault plan đã verify ở §3.3.1.
+
+**Process label D\***
+- Lý do cần: chỉ có R* thì không phân biệt được chẩn đoán có bằng chứng với đoán bừa, nên cần nhãn mô tả các sự thật chẩn đoán cần có để biện minh cho R*.
+- Không dùng một chuỗi lệnh chuẩn duy nhất (gold tool sequence), vì như vậy gắn đánh giá vào workflow mà người gán nhãn ưa thích và phạt những agent đi đường khác nhưng vẫn đến cùng chẩn đoán. Thay vào đó chấm các sự thật đã thiết lập và quan hệ phụ thuộc giữa chúng. Đây là cách đáp ứng R3 và giải quyết Gap 3.
+- D* được biểu diễn là một đồ thị bằng chứng (diagnostic evidence graph) D* = ⟨M*, K*, ≺*, Q*⟩:
+  - **Milestone (M\*):** một sự thật chẩn đoán nguyên tử, không phải quan sát thô, giả thuyết tạm thời hay nhánh có điều kiện. Ví dụ "PVC đang Pending" là milestone, còn "xem PVC" là hành động gọi tool nên không được gán nhãn. Một mệnh đề chỉ được tách ra khi các phần của nó có thể được thiết lập độc lập hoặc dẫn tới các phụ thuộc khác nhau.
+  - **Nhóm milestone (K\*):** phân hoạch các milestone thành nhóm. Nhóm một phần tử là sự thật bắt buộc. Nhóm nhiều phần tử gồm các sự thật có thể thay thế nhau, cùng tạo ra một bước tiến chẩn đoán. Quá trình biện minh hoàn tất khi mỗi nhóm có ít nhất một milestone được thiết lập.
+  - **Quan hệ phụ thuộc (≺\*):** đồ thị có hướng không chu trình, ghi các điều kiện tiên quyết về bằng chứng giữa các nhóm. Bao đóng bắc cầu của nó xác định thứ tự chẩn đoán bắt buộc. Các nhóm không nối với nhau bằng đường có hướng thì không có thứ tự.
+  - **Evidence bundle (Q\*(m)):** các cách chấp nhận được để thiết lập milestone m. Mỗi evidence clause q gồm một tool, các tham số chấp nhận được, và một điều kiện (predicate) trên response đã chuẩn hóa. Một bundle được thỏa khi mọi clause của nó đã được quan sát. Milestone được thiết lập khi ít nhất một bundle được thỏa.
+- Ví dụ của paper: `U → M1 → (M2 ∨ M3) → M4 → (M5, M6) → R*`. Khi đó K* gồm {M1}, {M2, M3}, {M4}, {M5}, {M6}. Nhóm {M2, M3} hoàn thành khi có M2 hoặc M3, và là điều kiện tiên quyết của {M4}. M5 và M6 cùng phụ thuộc M4 nhưng không phụ thuộc nhau nên làm thứ tự nào cũng được.
+- Phân biệt hai tầng "hoặc": K* là các sự thật thay thế nhau, còn Q*(m) là các cách chứng minh thay thế nhau cho cùng một sự thật. Ví dụ Q*(m) = {q1}, {q2, q3} nghĩa là q1 ∨ (q2 ∧ q3): m được thiết lập bằng q1 một mình, hoặc bằng q2 cùng q3.
+- Nhờ đó nhãn cho phép nhiều sự thật, nguồn bằng chứng và thứ tự điều tra độc lập, không áp đặt một chuỗi lệnh chuẩn.
+
+**Quy trình gán nhãn**
+- Người gán nhãn: 3 thành viên của nhóm benchmark, mỗi người có ít nhất 3 năm kinh nghiệm chẩn đoán lỗi cloud.
+- Với mỗi case, bắt đầu từ chuỗi nhân quả đã xác lập lúc verify (§3.3.1), nối cơ chế lỗi đã kích hoạt với triệu chứng trong user query.
+- Đi ngược chuỗi này từ triệu chứng về cơ chế lỗi, chỉ giữ các sự thật nguyên tử, quan sát được trong snapshot và cần thiết cho chẩn đoán làm milestone.
+- Chia milestone thành các nhóm K*. Hai milestone chỉ được xếp cùng nhóm khi mỗi cái độc lập thỏa cùng một phụ thuộc phía sau, với cùng các nhóm tiên quyết. Quan hệ giữa các nhóm cho ra ≺*.
+- Để dựng Q*(m): duyệt toàn bộ kho response của case (kết quả của các tool chạy trước, với các tham số hợp lệ đã liệt kê). Mỗi clause trỏ tới một mục trong kho và khớp một thuộc tính của response đã chuẩn hóa, thuộc tính đó thiết lập sự thật mà m biểu diễn. Response tự đủ thì tạo bundle một clause, các response bổ trợ nhau thì gộp thành bundle chung.
+
+**Kiểm tra nhãn (validation)**
+- Tự động: phát lại mỗi annotation trên snapshot đóng băng để kiểm tra cấu trúc đồ thị, tính nhất quán tham số theo case, mỗi clause thực thi được, và bằng chứng thỏa được.
+- Hai auditor có kinh nghiệm vận hành Kubernetes và chẩn đoán lỗi cloud review độc lập từng annotation theo các tiêu chí: đủ nhân quả, milestone nguyên tử và không dư thừa, phụ thuộc đúng, không thiên vị đường đi nào giữa các lựa chọn thay thế. Họ xem U, R*, D* và snapshot, nhưng không được xem fault plan dùng lúc xây dựng.
+- Bất đồng và đề xuất sửa được một chuyên gia cấp cao về cloud-native phân xử.
+- Kết quả: 9,4% đồ thị được sửa và replay-validate lại, phần còn lại được chấp nhận nguyên trạng. Trung bình mỗi đồ thị có 3,3 milestone và mỗi milestone có 2,7 evidence bundle.
+
+**Nhận xét của người đọc (không phải của paper): tính khách quan và chủ quan của việc gán nhãn**
+
+Phần khách quan, có căn cứ:
+- R* lấy từ fault plan đã verify, không cần phán đoán.
+- Chuỗi nhân quả gốc (từ cơ chế lỗi đến triệu chứng) đã được xác lập lúc verify trên cluster thật.
+- Mỗi evidence clause trỏ tới một mục có thật trong kho response, và replay kiểm tra được bằng chứng đó đạt được.
+
+Phần chủ quan:
+- Chuỗi nhân quả cho biết lỗi xảy ra thế nào, còn D* phải trả lời agent cần biết những gì để tin vào kết luận. Bước chuyển này phụ thuộc phán đoán của người gán nhãn: sự thật nào là cần thiết, cắt thế nào là nguyên tử, hai sự thật nào thay thế nhau, thứ tự phụ thuộc ra sao.
+- Replay chỉ kiểm tra được bằng chứng đạt được, không kiểm tra được nhãn có đầy đủ và đúng mức cần thiết hay không.
+- Biện pháp của paper: hai auditor độc lập bị che fault plan và một người phân xử. Con số 9,4% đồ thị bị sửa cho thấy lỗi hoặc bất đồng là có thật.
+- Chưa thấy chỉ số đồng thuận giữa người gán nhãn trong phần đã đọc. Người gán nhãn đều thuộc nhóm tác giả, paper không nói rõ auditor có độc lập với họ hay không.
+
+Chi tiết xem `finding/CloudOpsBench_FINDING.md`.
+
