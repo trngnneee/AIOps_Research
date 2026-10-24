@@ -43,3 +43,185 @@ Cho agent làm việc trên hạ tầng thực tế, lấy metric/log trực ti�
 - Ba tiêu chí của quá trình: completeness (đủ bằng chứng), causal coherence (đúng thứ tự nhân quả), efficiency (hiệu quả).
 
 **Lý do cốt lõi (construct validity):** khả năng benchmark tuyên bố đo gồm chọn hành động chẩn đoán, thu thập observation và lập luận nhân quả, nhưng metric chỉ đo dự đoán cuối.
+
+## 2.3 Evaluation Requirements: yêu cầu đối với benchmark (§2.3)
+
+Từ các gap ở trên, paper đưa ra 3 yêu cầu đối với benchmark đánh giá agentic RCA.
+
+### R1: System-facing evidence acquisition
+- AI phải tương tác với hệ thống thông qua tools và tự thu thập dữ liệu.
+- Agent tự chọn cả tool lẫn target thông qua một tập diagnostic interface chuẩn, nhận về các observation đã được ghi lại (captured) từ hệ thống, và điều chỉnh hành động tiếp theo dựa trên kết quả trả về.
+
+### R2: Matched and reusable incident evidence
+- Nhiều model AI cùng điều tra một sự cố trên một tập quan sát chung, thay vì phải deploy và setup lại hạ tầng có điều kiện lỗi cho từng model.
+- Điều kiện: cùng một bằng chứng sẵn có và cơ chế truy vấn–phản hồi mang tính xác định (deterministic query-response mapping, cùng truy vấn thì cùng kết quả), không cần redeploy hay inject lại lỗi cho mỗi lần đánh giá. Nhờ vậy các model được so sánh trong cùng điều kiện.
+
+### R3: Tool-sequence-neutral process evaluation
+- Ngoài kết quả cuối cùng, benchmark phải truy cập được bằng chứng và thứ tự thực hiện của model, nên quá trình thực hiện của AI cũng được đánh giá song song với kết luận cuối cùng.
+- Ba khía cạnh được đánh giá: evidential completeness, causal order, efficiency.
+- Không áp đặt một chuỗi lệnh chuẩn: "thứ tự" là thứ tự nhân quả của các fact đã thiết lập, không phải thứ tự gọi lệnh. Các fact tương đương bằng chứng và các thứ tự điều tra độc lập nhận điểm như nhau.
+
+**Nhận xét riêng của người đọc (không phải của paper):** R1, R2, R3 tương ứng lần lượt với Gap 1, Gap 2, Gap 3. Paper chỉ nói các gap "yield" ba yêu cầu này, và §3 ghép mỗi yêu cầu với một thành phần của Cloud-OpsBench (R1: snapshot-backed diagnostic interfaces; R2: replay cùng một evidence; R3: milestone evidence graph).
+
+## 3. Cloud-OpsBench (§3)
+
+### 3.1 Design Philosophy và Task Formulation (§3.1)
+
+**Ý tưởng thiết kế: State Snapshot paradigm**
+- Thực nghiệm trên cluster thật thì sát thực tế (real), nhưng khó tái lập và tốn chi phí khi mở rộng quy mô (Gap 2).
+- Làm trên tập static thì thiếu tương tác giữa agent và hệ thống (Gap 1).
+- Vì vậy tác giả tạo sẵn các bản snapshot của hệ thống đã được inject fault. Khi thực nghiệm, snapshot được phát lại như một môi trường giả lập (mocked operational interface), và AI agent được đánh giá trên đó.
+- Snapshot gồm trạng thái hệ thống sau khi verify (resource, config, topology, trạng thái component) và event, log, metric theo thời gian trong khoảng từ lúc xác nhận hệ thống khỏe đến lúc lỗi biểu hiện.
+- Thiết kế này không loại bỏ nhiễu có sẵn trong dữ liệu sự cố gốc, mà chỉ loại bỏ sự không xác định của môi trường lúc đánh giá (evaluation-time environmental nondeterminism): dữ liệu đến từ lỗi thật, còn không gian quan sát được cố định để so sánh các agent.
+
+**Công thức hóa một lần đánh giá (episode)**
+
+`Φ : ⟨U, S⟩ → ⟨T, R̂⟩`
+
+| Ký hiệu | Ý nghĩa |
+|---|---|
+| U | User query: mô tả triệu chứng mà agent nhận được |
+| S | Snapshot (trạng thái hệ thống đã đóng băng); agent không thấy trực tiếp, chỉ truy cập qua tool |
+| T | Quá trình thực tế của agent: danh sách các cặp (tool đã gọi, observation trả về) |
+| R̂ | Kết luận cuối của agent: (component, fault type) |
+
+**Cách chấm**
+- R\* = (component thật, fault type thật) là đáp án kỳ vọng về kết quả. So R̂ với R\* để chấm kết luận cuối.
+- D\* = diagnostic evidence graph là quá trình kỳ vọng, gồm các trạng thái chẩn đoán trung gian cần có để biện minh cho R\* (xây ở §3.3.3). So T với D\* để chấm quá trình thực tế của agent.
+
+### 3.2 Phase 1: Fault Knowledge Base Construction (§3.2)
+
+Phase 1 xây một nền tri thức về fault, làm đầu vào cho Phase 2. Output là **fault knowledge base**: mỗi fault type có một entry có cấu trúc.
+
+**Quy trình**
+1. **Nguồn tri thức (3 nguồn):**
+   - Tài liệu chính thức của Kubernetes, cho các lỗi cấu hình theo đặc tả (ví dụ selector của Service sai).
+   - Cộng đồng developer (Stack Overflow, KodeKloud Notes), cho các lỗi vận hành thực tế.
+   - Tài liệu học thuật, cho các failure mode kinh điển.
+2. **LLM tổng hợp:** dùng Gemini 3 Pro (few-shot prompting) để trích xuất thành dữ liệu có cấu trúc mô tả từng loại fault.
+3. **Kiểm tra trước khi sang Phase 2 (hai lớp):**
+   - LLM consistency check: tìm chỗ thiếu, sai định dạng hoặc mâu thuẫn kỹ thuật, và chỉnh lại mô tả.
+   - Reviewer có kinh nghiệm vận hành cloud-native: đánh giá logic nhân quả của fault và tính khả thi kỹ thuật của template.
+
+**Mỗi entry gồm hai phần**
+- **Metadata:** tên fault, cơ chế gây lỗi, trạng thái lỗi cục bộ dự kiến, các biểu hiện có thể thấy ở tầng trên.
+- **Reproduction template (có tham số):** điều kiện tiên quyết, thao tác gây lỗi, logic kích hoạt, viết bằng biến có kiểu thay vì tên resource cụ thể. Ví dụ template *service selector mismatch* yêu cầu selector của Service khác label của các Pod backend, còn namespace, Service, Pod, label key và value để trống cho Phase 2 điền.
+
+**Entry ở Phase 1 mới chỉ là ứng viên, chưa được coi là hợp lệ.** Validation thật diễn ra ở Phase 2 trên cluster. Một fault type chỉ được giữ trong taxonomy cuối khi có ít nhất một case cụ thể chạy thật và vượt kiểm chứng, nhằm tránh coi một template do LLM trích xuất là hợp lệ khi chưa được thử.
+
+**Kết quả:** 57 fault type thuộc 8 nhóm (Table 2), mỗi nhóm được gán nhãn độ khó (Easy/Medium/Hard) lúc xây dựng, dựa trên mức độ dễ quan sát triệu chứng và khoảng cách chẩn đoán. Mọi case trong một nhóm dùng chung nhãn.
+
+**8 nhóm fault (Table 2)**
+
+| Nhóm | Mô tả | Số fault type | Độ khó | Số case |
+|---|---|---|---|---|
+| Admission Control | Request bị API server từ chối do vượt quota hoặc thiếu quyền | 6 | Medium | 58 |
+| Scheduling | Pod kẹt ở Pending do không thỏa ràng buộc node hoặc affinity | 12 | Easy | 164 |
+| Startup | Tạo Pod thất bại | 5 | Easy | 86 |
+| Runtime | Ứng dụng crash hoặc fail health probe khi đang chạy | 12 | Easy | 141 |
+| Service Routing | Lỗi định tuyến traffic giữa các thành phần nội bộ | 6 | Medium | 91 |
+| Performance | Suy giảm hiệu năng do quá tải hoặc mất gói mạng | 4 | Hard | 76 |
+| Infrastructure | Sự cố ở control plane hoặc thành phần nền của cluster | 4 | Medium | 40 |
+| Application Code Defect | Lỗi code ở logic nghiệp vụ chính | 8 | Hard | 98 |
+| **Tổng** | | **57** | | **754** |
+
+Ghi chú phần "hiểu là" bên dưới: paper chỉ liệt kê tên fault type trong Table 2, không giải thích từng cái. Phần giải thích là người đọc suy ra từ tên và kiến thức Kubernetes. Đã điền đủ 8 nhóm. Mục có dấu (?) là phần suy đoán từ tên, chưa chắc, cần kiểm tra lại.
+
+**Fault type: hiểu là**
+
+*Admission Control*
+- `NamespaceCPUQuotaExceeded`: tổng CPU request trong namespace vượt quota CPU
+- `NamespaceMemoryQuotaExceeded`: vượt quota memory
+- `NamespacePodQuotaExceeded`: số Pod vượt quota số Pod
+- `NamespaceServiceQuotaExceeded`: số Service vượt quota số Service
+- `NamespaceStorageQuotaExceeded`: dung lượng storage vượt quota
+- `MissingServiceAccount`: không phải quota mà là lỗi quyền, Pod tham chiếu một ServiceAccount không tồn tại nên bị từ chối
+
+*Scheduling*
+- `NodeCordonMismatch` (?): node bị cordon (đánh dấu không nhận Pod mới) nên Pod không được xếp vào
+- `NodeAffinityMismatch`: nodeAffinity của Pod không khớp label của node nào
+- `NodeSelectorMismatch`: nodeSelector của Pod không khớp label của node nào
+- `PodAntiAffinityConflict`: luật anti-affinity khiến không còn node nào thỏa để đặt Pod
+- `TaintTolerationMismatch`: node có taint mà Pod không có toleration tương ứng
+- `CPUCapacityMismatch`: CPU request của Pod lớn hơn CPU còn trống trên node
+- `MemoryCapacityMismatch`: memory request của Pod lớn hơn memory còn trống trên node
+- `PVBindingOccupied` (?): PersistentVolume cần bind đã bị PVC khác chiếm
+- `PVCSelectorMismatch`: selector của PVC không khớp label của PV nào
+- `PVCStorageClassMismatch`: storageClass PVC yêu cầu không khớp với PV/StorageClass có sẵn
+- `PVCCapacityMismatch`: dung lượng PVC yêu cầu lớn hơn dung lượng PV có sẵn
+- `PVCAccessModeMismatch`: access mode PVC yêu cầu không khớp access mode của PV
+
+*Startup*
+- `VolumeMountPermissionDenied`: Pod mount volume nhưng bị từ chối quyền truy cập
+- `MissingSecretBinding`: Pod tham chiếu một Secret không tồn tại nên container không khởi tạo được
+- `IncorrectImageReference`: tên hoặc tag image sai nên không pull được image
+- `ImageRegistryDNSFailure`: không phân giải được DNS của registry nên không pull được image
+- `MissingImagePullSecret`: registry riêng (private) nhưng Pod thiếu imagePullSecret
+
+*Runtime*
+- `OOMKilled`: container dùng vượt memory limit nên bị kill
+- `LivenessProbeIncorrectProtocol`: liveness probe cấu hình sai protocol nên probe fail và container bị restart
+- `LivenessProbeIncorrectPort`: liveness probe trỏ sai port
+- `LivenessProbeIncorrectTiming` (?): liveness probe cấu hình timing (delay, timeout, period) không phù hợp nên bị kill sớm
+- `ReadinessProbeIncorrectProtocol`: readiness probe sai protocol nên Pod không Ready, không nhận traffic
+- `ReadinessProbeIncorrectPort`: readiness probe trỏ sai port
+- `ServiceSidecarPortConflict` (?): sidecar xung đột port với container ứng dụng
+- `MysqlInvalidCredentials`: ứng dụng dùng sai user hoặc mật khẩu MySQL
+- `MysqlInvalidPort`: ứng dụng kết nối sai port MySQL
+- `DBReadOnly`: database ở chế độ chỉ đọc nên thao tác ghi thất bại
+- `DBConnectionExhaustion`: hết số connection tới database
+- `DeploymentZeroReplicas`: Deployment bị scale về 0 replica nên không còn Pod nào chạy
+
+*Service Routing*
+- `ServiceSelectorMismatch`: selector của Service không khớp label của Pod nên Service không có endpoint
+- `ServicePortMappingMismatch`: port hoặc targetPort của Service không khớp port của container
+- `ServiceProtocolMismatch`: protocol khai báo ở Service không khớp với thực tế
+- `ServiceEnvVarAddressMismatch` (?): biến môi trường chứa địa chỉ của service khác trỏ sai
+- `GatewayMisroute` (?): gateway định tuyến traffic sai đích
+- `ServiceDNSResolutionFailure`: không phân giải được tên Service qua DNS
+
+*Performance*
+- `PodCPUOverload`: Pod bị quá tải CPU
+- `PodNetworkDelay`: độ trễ mạng tăng ở mức Pod
+- `NodeNetworkDelay`: độ trễ mạng tăng ở mức node
+- `NodeNetworkPacketLoss`: mất gói tin mạng ở mức node
+
+*Infrastructure*
+- `ContainerdUnavailable`: container runtime containerd trên node ngừng hoạt động
+- `KubeletUnavailable`: kubelet trên node ngừng hoạt động
+- `KubeProxyUnavailable`: kube-proxy ngừng hoạt động nên routing của Service bị lỗi
+- `KubeSchedulerUnavailable`: scheduler ngừng hoạt động nên Pod mới không được xếp vào node
+
+*Application Code Defect*
+- `CodeMissingParameter`: code thiếu một tham số cần thiết
+- `CodeBusyLoop`: vòng lặp bận làm CPU tăng cao
+- `CodeExcessiveFileReads`: đọc file quá mức
+- `CodeWrongReturn`: hàm trả về giá trị sai
+- `CodeExcessiveFileWrites`: ghi file quá mức
+- `CodeWrongArgumentOrder`: truyền sai thứ tự đối số
+- `CodeArtificialDelay`: chèn độ trễ nhân tạo vào code
+- `CodeMemoryLeak`: rò rỉ bộ nhớ
+
+Ví dụ fault type: Scheduling gồm TaintTolerationMismatch, PVCSelectorMismatch; Service Routing gồm ServiceSelectorMismatch, ServicePortMappingMismatch; Infrastructure gồm KubeletUnavailable, KubeProxyUnavailable; Application Code Defect gồm CodeBusyLoop, CodeMemoryLeak. Danh sách đầy đủ ở Table 2 của paper.
+
+**Quan hệ nhóm, fault type và case**
+- Một nhóm có nhiều fault type, một fault type có nhiều case. Ví dụ nhóm Admission Control có 6 fault type và 58 case, tức là 58 case là tổng của cả 6 fault type, trung bình khoảng 9–10 case mỗi fault type.
+- Fault type là một entry (template) trong knowledge base ở Phase 1. Case là một lần áp dụng template đó lên một mục tiêu cụ thể trên cluster, kèm snapshot và nhãn, và là đơn vị mà agent được đánh giá.
+- Template để trống tên resource. Ở Phase 2, Generator tạo fault plan riêng cho từng case từ entry và workload đích, chọn resource cụ thể và tham số vận hành. Vì vậy cùng một fault type có thể cho nhiều case, tùy ứng dụng đích (OnlineBoutique hoặc TrainTicket), component bị inject và tham số.
+- Table 2 chỉ cho số case theo nhóm, không cho theo từng fault type, nên chưa biết số case của mỗi fault type có đều nhau không. Việc các case cùng fault type khác nhau ở những yếu tố nào là suy ra từ §3.3.1, chưa thấy paper nêu rõ, cần kiểm tra thêm ở §3.3 hoặc appendix.
+
+### 3.3 Phase 2: Automated Fault Case Generation (§3.3)
+
+**Testbed: hạ tầng**
+- Cluster Kubernetes v1.31, 4 node, triển khai trên Huawei Cloud ECS.
+- Hai ứng dụng microservice làm workload: OnlineBoutique (11 service) và TrainTicket (41 service, có các service dùng database).
+- Quan sát (observability): Prometheus và Istio cho metric, native API của Kubernetes cho log và trạng thái object.
+- Tạo traffic người dùng: Locust.
+- Giả lập lỗi hạ tầng: ChaosBlade, cho các nhiễu loạn ở mức hạ tầng như network loss và disk pressure. Các lỗi cấu hình thì dùng các lệnh `kubectl` đơn lẻ (atomic).
+
+**Testbed: phần code**
+- Với nhóm fault lỗi code, tác giả sửa chính code của service bằng các mẫu bug có chủ đích như thiếu giá trị tham số, hàm trả về sai giá trị, xử lý exception sai (theo ref [51] trong paper).
+- Mỗi bản sửa được đóng gói thành một service image có thể deploy ngay lên Kubernetes.
+
+**Lý do chọn Kubernetes:** Kubernetes có control plane phân tán phức tạp để inject fault và có kho tài liệu chuẩn hóa, nên kiểm tra được khả năng lập luận dựa trên tri thức, khác với benchmark xây trên hệ thống độc quyền hoặc ít người biết.
+
