@@ -262,3 +262,50 @@ Quy trình tạo case là một vòng lặp gồm 3 agent: Generator, Executor, 
 
 **Kết quả:** 800 fault plan ứng viên được tạo, 46 plan bị loại vì không biểu hiện triệu chứng ổn định hoặc không chẩn đoán được (stable or diagnosable symptoms).
 
+#### 3.3.2 State Snapshots (§3.3.2)
+
+Sau khi một fault plan được verify, hệ thống chạy trước (pre-execute) bộ tool chẩn đoán T1–T12 trên sự cố đã verify. Mỗi tool trả về response phản ánh trạng thái cụm tại thời điểm đó, và toàn bộ response được lưu vào một kho JSON. Kho JSON này là snapshot, đóng vai trò lớp lưu trữ cho việc replay có tính xác định (deterministic replay).
+
+**Mục đích:** khi đánh giá các model về sau, model nào gọi tool cũng nhận về cùng một response, tương ứng với cùng một trạng thái hệ thống.
+
+**Danh sách 12 tool (Table 3)**
+
+| Tool | Trả về |
+|---|---|
+| T1. `GetResources(type, namespace, name, flags)` | Danh sách resource hoặc object được chọn, kèm status, metadata và thuộc tính mở rộng |
+| T2. `DescribeResource(type, name, namespace)` | Chi tiết runtime của một object Kubernetes: state, conditions, events |
+| T3. `GetAppYAML(service_name)` | File YAML cấu hình Deployment của service |
+| T4. `GetServiceDependencies(service_name)` | Đồ thị phụ thuộc của service, gốc là service đích |
+| T5. `GetRecentLogs(service_name, namespace)` | Log gần đây của service để xem lỗi runtime |
+| T6. `CheckConnectivity(namespace, svc_name, port)` | Kết quả kiểm tra TCP reachability tới endpoint của service |
+| T7. `GetClusterConfiguration()` | Thông tin các node của cluster: tài nguyên, label, taint, trạng thái |
+| T8. `GetAlerts()` | Cảnh báo bất thường về metric, sinh bởi bộ phát hiện theo ngưỡng |
+| T9. `GetErrorLogs(service_name, namespace)` | Tóm tắt các dòng log khớp mẫu error, exception hoặc failure |
+| T10. `CheckNodeServiceStatus(node_name, component_name)` | Trạng thái hoạt động của thành phần ở mức node hoặc control plane |
+| T11. `ListCodeFiles(app_name)` | Các file source có sẵn của service, kèm mô tả ngắn |
+| T12. `GetSourceCode(app_name, file_path)` | Nội dung source code của một file đã chọn |
+
+**Bốn kênh bằng chứng của snapshot**
+1. Trạng thái resource và event: T1, T2, lấy trên các object Kubernetes trong namespace đích.
+2. Topology ứng dụng và telemetry: cấu hình tĩnh (T3), đồ thị phụ thuộc (T4), log (T5, T9), kết quả reachability (T6).
+3. Ngữ cảnh mức cluster: sức khỏe node và component (T7, T10), metric được chuyển thành cảnh báo có cấu trúc (T8).
+4. Bằng chứng từ source code: T11, T12, dùng cho các lỗi mức ứng dụng.
+
+**Phạm vi dữ liệu theo thời gian**
+- Snapshot chụp trạng thái hệ thống sau khi verify, kèm event, log, metric có timestamp trong khoảng của riêng case đó. Khoảng này từ lúc xác nhận hệ thống khỏe (baseline) đến lúc xác nhận lỗi biểu hiện (manifestation).
+- Snapshot builder ghi lại hai mốc thời gian này và dùng chúng làm biên khi truy xuất dữ liệu theo thời gian.
+
+**Cách giao diện replay xử lý truy vấn**
+- Replay không phải simulator viết tay: với truy vấn được hỗ trợ, response là output thật chụp từ sự cố đã verify trên cluster thật.
+- Trước khi tra kho, giao diện kiểm tra request theo schema của tool và chuẩn hóa các tham số quan trọng, để các request tương đương cùng trỏ về một mục trong kho.
+- Truy vấn vào object không tồn tại: trả response lỗi đã chụp, ví dụ `Not Found`.
+- Truy vấn hợp lệ nhưng ngoài phạm vi đã chạy trước: trả `UnsupportedQuery`, và không được hiểu là bằng chứng về trạng thái hệ thống.
+
+**Phạm vi và giới hạn**
+- Phạm vi của kho là hữu hạn: chỉ gồm response cho các truy vấn đã được chạy trước, lấy từ các object, namespace, service endpoint, node và source file có trong case. Không phải mọi truy vấn có thể có đều có response.
+- Agent vẫn phải tự chọn tool và tham số, không có danh sách truy vấn hay chuỗi lệnh định sẵn.
+- Quy mô: trung bình 599 response mỗi case (OnlineBoutique, 3,46 MiB) và 1.708 response mỗi case (TrainTicket, 8,75 MiB).
+- Một case chỉ được giữ lại khi bước annotation xác nhận mọi diagnostic fact cần thiết đều quan sát được qua giao diện snapshot.
+
+**Liên hệ với các gap:** cơ chế này giải quyết Gap 1 (agent điều tra qua tool hướng hệ thống thay vì đọc bản dump telemetry) và Gap 2 (các agent khác nhau gặp cùng một bằng chứng và cùng một ánh xạ truy vấn–phản hồi).
+
