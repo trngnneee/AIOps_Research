@@ -225,3 +225,40 @@ Ví dụ fault type: Scheduling gồm TaintTolerationMismatch, PVCSelectorMismat
 
 **Lý do chọn Kubernetes:** Kubernetes có control plane phân tán phức tạp để inject fault và có kho tài liệu chuẩn hóa, nên kiểm tra được khả năng lập luận dựa trên tri thức, khác với benchmark xây trên hệ thống độc quyền hoặc ít người biết.
 
+#### 3.3.1 Fault Injection Loop (§3.3.1)
+
+Quy trình tạo case là một vòng lặp gồm 3 agent: Generator, Executor, Verifier.
+
+**Generator Agent (Gemini 3 Pro)**
+- Đầu vào: một entry trong fault knowledge base (kết quả Phase 1) và workload đích (OnlineBoutique hoặc TrainTicket).
+- Đầu ra: fault plan riêng cho từng case. Mỗi plan gồm:
+  - Required pre-injection state: trạng thái hệ thống phải có trước khi inject (ví dụ Service `checkout` tồn tại, các Pod đang chạy bình thường).
+  - Resource selectors: nhắm vào resource nào (ví dụ Service `checkout` ở namespace `default`).
+  - Operational parameters: giá trị cụ thể của thao tác (ví dụ đổi selector thành giá trị sai).
+  - Ordered injection operations: các bước inject theo thứ tự.
+  - Runtime validation assertions: điều kiện kiểm tra sau khi inject để biết lỗi đã thật sự xảy ra. Gồm 3 loại: mechanism activation (điều kiện gây lỗi đang hoạt động ở đúng component), expected local failure state (trạng thái lỗi cục bộ xuất hiện, ví dụ Service không có endpoint), upper-layer manifestation (biểu hiện ở tầng trên nếu có, ví dụ request trả 503).
+
+**Executor Agent**
+- Trước mỗi lần inject: khôi phục testbed về trạng thái deploy sạch (clean state), gán selector vào trạng thái cluster vừa khôi phục, thiết lập điều kiện tiên quyết, xác nhận hệ thống khỏe (với case hướng service thì phải có một request end-to-end thành công).
+- Sau đó mới apply fault plan.
+
+**Verifier Agent**
+- Đánh giá các validation assertion dựa trên trạng thái cluster sau khi inject: object state, event, log, metric, kết quả connectivity.
+- Chỉ chấp nhận khi đủ 3 điều kiện: fault-inducing condition đang hoạt động ở đúng component, expected local failure state có mặt, và upper-layer manifestation (nếu có chỉ định) được quan sát thấy. Khi đó target và điều kiện lỗi đã verify được ghi vào verified fault plan.
+
+**Vì sao cần verify**
+- Cơ chế tự phục hồi của Kubernetes có thể che mất fault vừa inject. Ví dụ trong paper: Pod được chuyển sang node khác nên né được lỗi scheduling do taint.
+- Nếu không verify, benchmark sẽ có case mà lỗi thực tế đã tự biến mất, agent không thể chẩn đoán.
+
+**Vòng phản hồi**
+- Nếu verify thất bại, Verifier so sánh trạng thái runtime với cơ chế lỗi dự kiến rồi trả phản hồi có cấu trúc cho Generator (thiếu điều kiện tiên quyết, cường độ chưa đủ, hoặc có đường phục hồi ngoài ý muốn).
+- Generator được sửa selector hoặc tham số vận hành, nhưng giữ nguyên cơ chế lỗi và tiêu chí kiểm tra của entry. Quy trình clean deploy, inject, verify lặp lại.
+- Tối đa 3 lần sửa, quá 3 lần mà vẫn fail thì loại case.
+
+**Sau khi verify thành công**
+- Case được đưa sang bước tạo snapshot (§3.3.2).
+- User query U được tạo từ biểu hiện quan sát được, không để lộ component bị lỗi, cơ chế lỗi và các thông tin chỉ dùng lúc xây dựng.
+- Verified fault plan được giữ làm bằng chứng gốc (provenance), không đưa cho agent đánh giá và không được chấp nhận làm bằng chứng chẩn đoán.
+
+**Kết quả:** 800 fault plan ứng viên được tạo, 46 plan bị loại vì không biểu hiện triệu chứng ổn định hoặc không chẩn đoán được (stable or diagnosable symptoms).
+
