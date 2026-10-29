@@ -357,7 +357,7 @@ Mốc ngày giúp quản lý công việc; đạt gate mới là căn cứ mở 
 - [ ] **Experimental protocol:** chia tập, budget, repetitions, metrics, quy tắc abstain và thống kê.
 - [ ] **Đóng góp dự kiến:** phần nào về dữ liệu/protocol, phần nào về phương pháp; giới hạn tuyên bố.
 - [ ] **Thống nhất với giảng viên:** mức đóng góp cần đạt, phạm vi RCA bắt buộc và điều kiện mở remediation.
-
+    
 [cloud]: https://arxiv.org/abs/2603.00468v2
 [cloud-code]: https://github.com/LLM4Ops/Cloud-OpsBench
 [diag]: https://arxiv.org/html/2608.21310v2
