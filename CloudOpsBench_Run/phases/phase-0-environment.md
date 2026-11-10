@@ -1,6 +1,6 @@
 # Phase 0 — Môi trường + dữ liệu benchmark
 
-Báo cáo tổng: `../RUN_REPORT.md` · Plan: `/Users/trngnneee/CloudOpsBench/Cloud-OpsBench/RUN_PLAN.md`
+Plan: `../RUN_PLAN.md` · Repo: `/Users/trngnneee/CloudOpsBench/Cloud-OpsBench` @ `ec1d4f3`
 Ngày chạy: 2026-11-10.
 
 ## Môi trường
